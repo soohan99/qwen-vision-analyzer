@@ -23,7 +23,7 @@
       </div>
       <div class="hf-guide">
         ⓘ 토큰 없이 바로 <strong>"모델 로드"</strong> 버튼을 누르세요.<br/>
-        모델: <strong>onnx-community/Qwen3.5-0.8B-ONNX</strong> (공개 모델 · 한국어 지원 · WebGPU · ~500MB)
+        모델: <strong>onnx-community/Florence-2-base-ft</strong> (공개 모델 · Microsoft · WebGPU · ~300MB)
       </div>
       <button id="loadModelBtn" class="btn btn-primary" onclick="loadModel()">모델 로드</button>
       <div id="modelStatus" class="status-box">모델 미로드 상태입니다.</div>
@@ -72,7 +72,13 @@
           <h2>분석 결과</h2>
           <span id="tokenInfo" class="token-info"></span>
         </div>
-        <textarea id="promptInput" class="prompt-input" rows="3">이 이미지를 자세히 분석해서 한국어로 설명해 주세요. 화면에 보이는 모든 요소, 텍스트, 사람, 물체, 배경, 분위기 등을 상세하게 묘사해 주세요.</textarea>
+        <select id="promptInput" class="select-input" style="width:100%; padding:10px; margin-bottom:14px; font-size:0.9rem;">
+          <option value="<MORE_DETAILED_CAPTION>">상세 설명 (More Detailed Caption)</option>
+          <option value="<DETAILED_CAPTION>">일반 설명 (Detailed Caption)</option>
+          <option value="<CAPTION>">요약 설명 (Caption)</option>
+          <option value="<OCR>">텍스트 인식 (OCR)</option>
+          <option value="<OD>">객체 감지 (Object Detection)</option>
+        </select>
 
         <div class="settings-row">
           <label>Max Tokens <span class="help">?</span>
@@ -104,13 +110,13 @@
   </div>
 
   <script type="module">
-    import { env, AutoProcessor, AutoModelForVision2Seq, RawImage, TextStreamer } from
+    import { env, AutoProcessor, Florence2ForConditionalGeneration, RawImage } from
       'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/dist/transformers.min.js';
 
     // WebGPU 사용 설정
     env.backends.onnx.wasm.proxy = false;
 
-    const MODEL_ID = 'onnx-community/Qwen3.5-0.8B-ONNX';
+    const MODEL_ID = 'onnx-community/Florence-2-base-ft';
 
     let processor = null;
     let model = null;
@@ -166,12 +172,8 @@
           progress_callback: progressCallback
         });
 
-        model = await AutoModelForVision2Seq.from_pretrained(MODEL_ID, {
-          dtype: {
-            embed_tokens: 'q4',
-            vision_encoder: 'fp16',
-            decoder_model_merged: 'q4',
-          },
+        model = await Florence2ForConditionalGeneration.from_pretrained(MODEL_ID, {
+          dtype: 'fp32',
           device: 'webgpu',
           progress_callback: progressCallback
         });
@@ -305,58 +307,37 @@
         const image = await RawImage.fromURL(dataURL);
         addLog(`[${((Date.now()-startTime)/1000).toFixed(2)}s] 이미지 처리 완료`);
 
-        // 프롬프트 준비
-        const prompt = document.getElementById('promptInput').value;
-        const messages = [
-          {
-            role: 'user',
-            content: [
-              { type: 'image' },
-              { type: 'text', text: prompt }
-            ]
-          }
-        ];
+        // Florence-2 태스크 설정
+        const task = document.getElementById('promptInput').value.trim() || '<MORE_DETAILED_CAPTION>';
+        addLog(`[${((Date.now()-startTime)/1000).toFixed(2)}s] 태스크: ${task}`);
 
-        const text = processor.apply_chat_template(messages, { add_generation_prompt: true });
-        const inputs = await processor(text, image, { do_image_splitting: false });
-
-        addLog(`[${((Date.now()-startTime)/1000).toFixed(2)}s] 입력 토큰 수: ${inputs.input_ids.dims[1]}`);
-        addLog(`[${((Date.now()-startTime)/1000).toFixed(2)}s] ↳ 이전 단계 ${((Date.now()-startTime)/1000).toFixed(2)}s 소요`);
+        const inputs = await processor(task, image);
+        addLog(`[${((Date.now()-startTime)/1000).toFixed(2)}s] 입력 처리 완료`, '#ffd700');
 
         const maxTokens = parseInt(document.getElementById('maxTokens').value);
-        const temperature = parseFloat(document.getElementById('temperature').value);
-        const doSample = temperature > 0;
-
-        addLog(`[${((Date.now()-startTime)/1000).toFixed(2)}s] 4/4 텍스트 생성 중 - max_tokens=${maxTokens}, temp=${temperature}, do_sample=${doSample}`, '#ffd700');
-
-        resultEl.textContent = '';
-        let tokenCount = 0;
-
-        const streamer = new TextStreamer(processor.tokenizer, {
-          skip_prompt: true,
-          callback_function: (text) => {
-            resultEl.textContent += text;
-            resultEl.scrollTop = resultEl.scrollHeight;
-            tokenCount++;
-          }
-        });
-
         const genStart = Date.now();
-        await model.generate({
+
+        const generatedIds = await model.generate({
           ...inputs,
           max_new_tokens: maxTokens,
-          do_sample: doSample,
-          temperature: doSample ? temperature : undefined,
-          streamer,
         });
+
+        const generatedText = processor.batch_decode(generatedIds, { skip_special_tokens: false })[0];
+        const parsed = processor.post_process_generation(generatedText, task, {
+          width: image.width, height: image.height
+        });
+
+        const output = parsed[task] || generatedText;
+        resultEl.textContent = output;
 
         const totalTime = (Date.now() - startTime) / 1000;
         const genTime = (Date.now() - genStart) / 1000;
+        const tokenCount = generatedIds.dims ? generatedIds.dims[1] : 0;
         const tps = (tokenCount / genTime).toFixed(1);
 
-        addLog(`[${totalTime.toFixed(2)}s] ↳ 생성 완료: ${tokenCount}토큰, ${genTime.toFixed(1)}s (${tps} tokens/s)`, '#00ff88');
+        addLog(`[${totalTime.toFixed(2)}s] 생성 완료: ${genTime.toFixed(1)}s`, '#00ff88');
         addLog(`[${totalTime.toFixed(2)}s] 완료! 총 소요시간: ${totalTime.toFixed(1)}초`, '#00ff88');
-        tokenInfoEl.textContent = `${tokenCount}토큰 / ${totalTime.toFixed(1)}초 (${tps} t/s)`;
+        tokenInfoEl.textContent = `${totalTime.toFixed(1)}초 소요`;
 
       } catch (err) {
         console.error(err);
