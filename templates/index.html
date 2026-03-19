@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Qwen3.5 Vision 영상 분석기</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>Qwen3.5 Vision 영상 분석기</h1>
+    <p class="subtitle">On-Device AI (WebGPU) 기반 YouTube 영상 화면 분석</p>
+
+    <!-- 모델 로드 섹션 -->
+    <div class="card">
+      <div class="card-header">
+        <h2>1단계: AI 모델 로드</h2>
+      </div>
+      <button id="loadModelBtn" class="btn btn-primary" onclick="loadModel()">모델 로드</button>
+      <div id="modelStatus" class="status-box">모델 미로드 상태입니다.</div>
+      <div id="modelProgress" class="progress-container" style="display:none;">
+        <div id="progressBar" class="progress-bar"></div>
+        <div id="progressText" class="progress-text">0%</div>
+      </div>
+    </div>
+
+    <!-- YouTube 다운로드 섹션 -->
+    <div class="card">
+      <div class="card-header">
+        <h2>2단계: YouTube 영상 다운로드</h2>
+      </div>
+      <div class="input-row">
+        <input type="text" id="ytUrl" class="url-input"
+               placeholder="https://www.youtube.com/watch?v=..." />
+        <button class="btn btn-accent" onclick="downloadVideo()">다운로드</button>
+      </div>
+      <div id="downloadStatus" class="status-box" style="display:none;"></div>
+    </div>
+
+    <!-- 영상 플레이어 섹션 -->
+    <div class="main-grid">
+      <div class="card">
+        <div class="card-header">
+          <h2>영상 플레이어</h2>
+        </div>
+        <video id="videoPlayer" controls style="width:100%; border-radius:8px; display:none;">
+          영상을 다운로드하면 여기에 표시됩니다.
+        </video>
+        <div id="videoPlaceholder" class="video-placeholder">
+          YouTube URL을 입력하고 다운로드하세요
+        </div>
+        <button id="analyzeBtn" class="btn btn-analyze" onclick="analyzeFrame()" disabled>
+          화면 분석
+        </button>
+        <div id="analyzeLog" class="log-box" style="display:none;"></div>
+        <!-- 숨겨진 캔버스 (프레임 캡처용) -->
+        <canvas id="captureCanvas" style="display:none;"></canvas>
+      </div>
+
+      <!-- 분석 결과 섹션 -->
+      <div class="card">
+        <div class="card-header">
+          <h2>분석 결과</h2>
+          <span id="tokenInfo" class="token-info"></span>
+        </div>
+        <textarea id="promptInput" class="prompt-input" rows="3">이 이미지를 자세히 분석해서 한국어로 설명해 주세요. 화면에 보이는 모든 요소, 텍스트, 사람, 물체, 배경, 분위기 등을 상세하게 묘사해 주세요.</textarea>
+
+        <div class="settings-row">
+          <label>Max Tokens <span class="help">?</span>
+            <input type="number" id="maxTokens" value="512" min="64" max="2048" class="num-input" />
+          </label>
+          <label>Temperature <span class="help">?</span>
+            <input type="number" id="temperature" value="0" min="0" max="2" step="0.1" class="num-input" />
+          </label>
+          <label>이미지 크기 <span class="help">?</span>
+            <select id="imageSize" class="select-input">
+              <option value="224">224px</option>
+              <option value="336">336px</option>
+              <option value="448" selected>448px</option>
+              <option value="672">672px</option>
+            </select>
+          </label>
+        </div>
+
+        <div id="capturedFrame" class="captured-frame" style="display:none;">
+          <img id="capturedImg" src="" alt="캡처된 프레임" />
+          <div id="capturedLabel" class="captured-label"></div>
+        </div>
+
+        <div id="resultBox" class="result-box">
+          분석 결과가 여기에 표시됩니다.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { pipeline, env, AutoProcessor, AutoModelForVision2Seq, RawImage, TextStreamer } from
+      'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.3.3/dist/transformers.min.js';
+
+    // WebGPU 사용 설정
+    env.backends.onnx.wasm.proxy = false;
+
+    const MODEL_ID = 'onnx-community/Qwen2.5-VL-0.5B-Instruct-ONNX';
+
+    let processor = null;
+    let model = null;
+    let isModelLoaded = false;
+    let isAnalyzing = false;
+
+    // 전역 함수로 노출
+    window.loadModel = loadModel;
+    window.downloadVideo = downloadVideo;
+    window.analyzeFrame = analyzeFrame;
+
+    async function loadModel() {
+      const btn = document.getElementById('loadModelBtn');
+      const status = document.getElementById('modelStatus');
+      const progressContainer = document.getElementById('modelProgress');
+      const progressBar = document.getElementById('progressBar');
+      const progressText = document.getElementById('progressText');
+
+      if (isModelLoaded) {
+        status.textContent = '모델이 이미 로드되어 있습니다.';
+        return;
+      }
+
+      // WebGPU 지원 확인
+      if (!navigator.gpu) {
+        status.textContent = '❌ WebGPU가 지원되지 않습니다. Chrome 113+ 또는 Edge를 사용하세요.';
+        status.classList.add('error');
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = '모델 로딩 중...';
+      progressContainer.style.display = 'block';
+      status.textContent = '모델 다운로드 중... (첫 실행 시 약 500MB, 이후 캐시됨)';
+
+      try {
+        const progressCallback = (p) => {
+          if (p.status === 'progress') {
+            const pct = Math.round(p.progress || 0);
+            progressBar.style.width = pct + '%';
+            progressText.textContent = pct + '%';
+            status.textContent = `로딩: ${p.file || ''} (${pct}%)`;
+          } else if (p.status === 'done') {
+            status.textContent = `완료: ${p.file || ''}`;
+          }
+        };
+
+        processor = await AutoProcessor.from_pretrained(MODEL_ID, {
+          progress_callback: progressCallback
+        });
+
+        model = await AutoModelForVision2Seq.from_pretrained(MODEL_ID, {
+          dtype: {
+            embed_tokens: 'q4',
+            vision_encoder: 'fp16',
+            decoder_model_merged: 'q4',
+          },
+          device: 'webgpu',
+          progress_callback: progressCallback
+        });
+
+        isModelLoaded = true;
+        progressBar.style.width = '100%';
+        progressText.textContent = '100%';
+        status.textContent = '✅ 모델 로드 완료! WebGPU 가속 활성화됨';
+        status.classList.add('success');
+        btn.textContent = '모델 로드 완료';
+
+        const analyzeBtn = document.getElementById('analyzeBtn');
+        if (document.getElementById('videoPlayer').style.display !== 'none') {
+          analyzeBtn.disabled = false;
+        }
+
+      } catch (err) {
+        console.error(err);
+        status.textContent = `❌ 모델 로드 실패: ${err.message}`;
+        status.classList.add('error');
+        btn.disabled = false;
+        btn.textContent = '모델 로드 재시도';
+      }
+    }
+
+    async function downloadVideo() {
+      const url = document.getElementById('ytUrl').value.trim();
+      const statusEl = document.getElementById('downloadStatus');
+      const videoEl = document.getElementById('videoPlayer');
+      const placeholder = document.getElementById('videoPlaceholder');
+
+      if (!url) {
+        alert('YouTube URL을 입력하세요.');
+        return;
+      }
+
+      statusEl.style.display = 'block';
+      statusEl.textContent = '다운로드 중... (최대 5분 소요될 수 있습니다)';
+      statusEl.className = 'status-box';
+
+      try {
+        const res = await fetch('/download', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url })
+        });
+        const data = await res.json();
+
+        if (data.error) {
+          statusEl.textContent = `❌ 오류: ${data.error}`;
+          statusEl.classList.add('error');
+          return;
+        }
+
+        videoEl.src = data.url;
+        videoEl.style.display = 'block';
+        placeholder.style.display = 'none';
+        statusEl.textContent = `✅ 다운로드 완료: ${data.filename}`;
+        statusEl.classList.add('success');
+
+        if (isModelLoaded) {
+          document.getElementById('analyzeBtn').disabled = false;
+        }
+
+      } catch (err) {
+        statusEl.textContent = `❌ 오류: ${err.message}`;
+        statusEl.classList.add('error');
+      }
+    }
+
+    async function analyzeFrame() {
+      if (!isModelLoaded) {
+        alert('먼저 AI 모델을 로드하세요.');
+        return;
+      }
+      if (isAnalyzing) return;
+
+      const video = document.getElementById('videoPlayer');
+      if (!video.src || video.readyState < 2) {
+        alert('먼저 영상을 다운로드하고 재생하세요.');
+        return;
+      }
+
+      // 비디오 일시정지
+      video.pause();
+
+      isAnalyzing = true;
+      const analyzeBtn = document.getElementById('analyzeBtn');
+      analyzeBtn.disabled = true;
+      analyzeBtn.textContent = '분석 중...';
+
+      const logEl = document.getElementById('analyzeLog');
+      const resultEl = document.getElementById('resultBox');
+      const tokenInfoEl = document.getElementById('tokenInfo');
+      const capturedFrameEl = document.getElementById('capturedFrame');
+      const capturedImg = document.getElementById('capturedImg');
+      const capturedLabel = document.getElementById('capturedLabel');
+
+      logEl.style.display = 'block';
+      logEl.innerHTML = '';
+      resultEl.textContent = '분석 중...';
+
+      const addLog = (msg, color = '#ccc') => {
+        const line = document.createElement('div');
+        line.style.color = color;
+        line.textContent = msg;
+        logEl.appendChild(line);
+        logEl.scrollTop = logEl.scrollHeight;
+      };
+
+      const startTime = Date.now();
+
+      try {
+        // 프레임 캡처
+        const imgSize = parseInt(document.getElementById('imageSize').value);
+        const canvas = document.getElementById('captureCanvas');
+        canvas.width = imgSize;
+        canvas.height = imgSize;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, imgSize, imgSize);
+
+        const dataURL = canvas.toDataURL('image/jpeg', 0.85);
+        capturedImg.src = dataURL;
+        const timeStr = formatTime(video.currentTime);
+        capturedLabel.textContent = `[${timeStr}]`;
+        capturedFrameEl.style.display = 'block';
+
+        addLog(`[0.0s] 프레임 캡처 완료 (${imgSize}x${imgSize})`);
+
+        // RawImage 생성
+        const image = await RawImage.fromURL(dataURL);
+        addLog(`[${((Date.now()-startTime)/1000).toFixed(2)}s] 이미지 처리 완료`);
+
+        // 프롬프트 준비
+        const prompt = document.getElementById('promptInput').value;
+        const messages = [
+          {
+            role: 'user',
+            content: [
+              { type: 'image' },
+              { type: 'text', text: prompt }
+            ]
+          }
+        ];
+
+        const text = processor.apply_chat_template(messages, { add_generation_prompt: true });
+        const inputs = await processor(text, image, { do_image_splitting: false });
+
+        addLog(`[${((Date.now()-startTime)/1000).toFixed(2)}s] 입력 토큰 수: ${inputs.input_ids.dims[1]}`);
+        addLog(`[${((Date.now()-startTime)/1000).toFixed(2)}s] ↳ 이전 단계 ${((Date.now()-startTime)/1000).toFixed(2)}s 소요`);
+
+        const maxTokens = parseInt(document.getElementById('maxTokens').value);
+        const temperature = parseFloat(document.getElementById('temperature').value);
+        const doSample = temperature > 0;
+
+        addLog(`[${((Date.now()-startTime)/1000).toFixed(2)}s] 4/4 텍스트 생성 중 - max_tokens=${maxTokens}, temp=${temperature}, do_sample=${doSample}`, '#ffd700');
+
+        resultEl.textContent = '';
+        let tokenCount = 0;
+
+        const streamer = new TextStreamer(processor.tokenizer, {
+          skip_prompt: true,
+          callback_function: (text) => {
+            resultEl.textContent += text;
+            resultEl.scrollTop = resultEl.scrollHeight;
+            tokenCount++;
+          }
+        });
+
+        const genStart = Date.now();
+        await model.generate({
+          ...inputs,
+          max_new_tokens: maxTokens,
+          do_sample: doSample,
+          temperature: doSample ? temperature : undefined,
+          streamer,
+        });
+
+        const totalTime = (Date.now() - startTime) / 1000;
+        const genTime = (Date.now() - genStart) / 1000;
+        const tps = (tokenCount / genTime).toFixed(1);
+
+        addLog(`[${totalTime.toFixed(2)}s] ↳ 생성 완료: ${tokenCount}토큰, ${genTime.toFixed(1)}s (${tps} tokens/s)`, '#00ff88');
+        addLog(`[${totalTime.toFixed(2)}s] 완료! 총 소요시간: ${totalTime.toFixed(1)}초`, '#00ff88');
+        tokenInfoEl.textContent = `${tokenCount}토큰 / ${totalTime.toFixed(1)}초 (${tps} t/s)`;
+
+      } catch (err) {
+        console.error(err);
+        addLog(`오류: ${err.message}`, '#ff4444');
+        resultEl.textContent = `오류가 발생했습니다: ${err.message}`;
+      } finally {
+        isAnalyzing = false;
+        analyzeBtn.disabled = false;
+        analyzeBtn.textContent = '화면 분석';
+      }
+    }
+
+    function formatTime(seconds) {
+      const m = Math.floor(seconds / 60);
+      const s = Math.floor(seconds % 60);
+      return `${m}:${s.toString().padStart(2, '0')}`;
+    }
+  </script>
+</body>
+</html>
