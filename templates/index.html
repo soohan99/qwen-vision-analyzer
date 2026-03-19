@@ -95,13 +95,13 @@
   </div>
 
   <script type="module">
-    import { pipeline, env, AutoProcessor, AutoModelForVision2Seq, RawImage, TextStreamer } from
-      'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.3.3/dist/transformers.min.js';
+    import { env, AutoProcessor, AutoModelForImageTextToText, RawImage, TextStreamer } from
+      'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.4.0/dist/transformers.min.js';
 
     // WebGPU 사용 설정
     env.backends.onnx.wasm.proxy = false;
 
-    const MODEL_ID = 'onnx-community/Qwen2.5-VL-0.5B-Instruct-ONNX';
+    const MODEL_ID = 'onnx-community/SmolVLM-256M-Instruct';
 
     let processor = null;
     let model = null;
@@ -135,7 +135,7 @@
       btn.disabled = true;
       btn.textContent = '모델 로딩 중...';
       progressContainer.style.display = 'block';
-      status.textContent = '모델 다운로드 중... (첫 실행 시 약 500MB, 이후 캐시됨)';
+      status.textContent = '모델 다운로드 중... (첫 실행 시 약 250MB, 이후 캐시됨)';
 
       try {
         const progressCallback = (p) => {
@@ -153,9 +153,9 @@
           progress_callback: progressCallback
         });
 
-        model = await AutoModelForVision2Seq.from_pretrained(MODEL_ID, {
+        model = await AutoModelForImageTextToText.from_pretrained(MODEL_ID, {
           dtype: {
-            embed_tokens: 'q4',
+            embed_tokens: 'fp16',
             vision_encoder: 'fp16',
             decoder_model_merged: 'q4',
           },
