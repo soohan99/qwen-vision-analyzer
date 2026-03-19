@@ -107,6 +107,47 @@ h2 {
   background: #e07020;
 }
 
+.hf-token-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.hf-token-row label {
+  white-space: nowrap;
+  font-size: 0.9rem;
+  color: #aaa;
+}
+
+.hf-guide {
+  font-size: 0.82rem;
+  color: #888;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  line-height: 1.6;
+}
+
+.hf-guide a { color: #7c9ef5; }
+
+.btn-outline {
+  padding: 8px 14px;
+  border: 1px solid #7c9ef5;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  background: transparent;
+  color: #7c9ef5;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.btn-outline:hover { background: #7c9ef520; }
+
 .input-row {
   display: flex;
   gap: 10px;
