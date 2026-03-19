@@ -318,22 +318,32 @@
         const genStart = Date.now();
 
         const generatedIds = await model.generate({
-          ...inputs,
+          input_ids: inputs.input_ids,
+          pixel_values: inputs.pixel_values,
           max_new_tokens: maxTokens,
         });
 
-        const generatedText = processor.batch_decode(generatedIds, { skip_special_tokens: false })[0];
-        const parsed = processor.post_process_generation(generatedText, task, {
-          width: image.width, height: image.height
-        });
+        // 입력 토큰 제외하고 생성된 토큰만 디코딩
+        const inputLen = inputs.input_ids.dims[1];
+        const newTokens = generatedIds.slice(null, [inputLen, null]);
 
-        const output = parsed[task] || generatedText;
+        let output;
+        try {
+          const decoded = processor.batch_decode(newTokens, { skip_special_tokens: false });
+          const parsed = processor.post_process_generation(decoded[0], task, {
+            width: image.width, height: image.height
+          });
+          output = parsed[task] ?? decoded[0];
+        } catch(e) {
+          // fallback: tokenizer 직접 사용
+          const decoded = processor.tokenizer.batch_decode(newTokens, { skip_special_tokens: true });
+          output = decoded[0];
+        }
+
         resultEl.textContent = output;
 
         const totalTime = (Date.now() - startTime) / 1000;
         const genTime = (Date.now() - genStart) / 1000;
-        const tokenCount = generatedIds.dims ? generatedIds.dims[1] : 0;
-        const tps = (tokenCount / genTime).toFixed(1);
 
         addLog(`[${totalTime.toFixed(2)}s] 생성 완료: ${genTime.toFixed(1)}s`, '#00ff88');
         addLog(`[${totalTime.toFixed(2)}s] 완료! 총 소요시간: ${totalTime.toFixed(1)}초`, '#00ff88');
