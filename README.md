@@ -42,12 +42,12 @@ python3 app.py
 
 터미널에 아래 메시지가 나타나면 성공입니다:
 ```
-앱이 실행되었습니다! 브라우저에서 http://localhost:5000 을 열어주세요.
+앱이 실행되었습니다! 브라우저에서 http://localhost:8080 을 열어주세요.
 ```
 
 ### 4. 브라우저에서 접속
 
-Chrome 또는 Edge 브라우저로 `http://localhost:5000` 접속
+Chrome 또는 Edge 브라우저로 `http://localhost:8080` 접속
 
 ## 사용 방법
 

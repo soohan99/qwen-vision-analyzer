@@ -61,5 +61,5 @@ def serve_video(filename):
 
 
 if __name__ == '__main__':
-    print("앱이 실행되었습니다! 브라우저에서 http://localhost:5000 을 열어주세요.")
-    app.run(debug=False, host='0.0.0.0', port=5000)
+    print("앱이 실행되었습니다! 브라우저에서 http://localhost:8080 을 열어주세요.")
+    app.run(debug=False, host='0.0.0.0', port=8080)
