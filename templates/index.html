@@ -23,7 +23,7 @@
       </div>
       <div class="hf-guide">
         ⓘ 토큰 없이 바로 <strong>"모델 로드"</strong> 버튼을 누르세요.<br/>
-        모델: <strong>onnx-community/Qwen2-VL-2B-Instruct</strong> (공개 모델 · 한국어 지원 · WebGPU)
+        모델: <strong>onnx-community/Qwen3.5-0.8B-ONNX</strong> (공개 모델 · 한국어 지원 · WebGPU · ~500MB)
       </div>
       <button id="loadModelBtn" class="btn btn-primary" onclick="loadModel()">모델 로드</button>
       <div id="modelStatus" class="status-box">모델 미로드 상태입니다.</div>
@@ -110,7 +110,7 @@
     // WebGPU 사용 설정
     env.backends.onnx.wasm.proxy = false;
 
-    const MODEL_ID = 'onnx-community/Qwen2-VL-2B-Instruct';
+    const MODEL_ID = 'onnx-community/Qwen3.5-0.8B-ONNX';
 
     let processor = null;
     let model = null;
